@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 import httpx
 from app.config import settings
-from app.lmstudio import chat_with_tools, list_models
+from app.lmstudio import chat_with_tools, list_models, stream_chat
 from app.earthquake_store import (
     count_earthquakes,
     get_last_sync,
@@ -19,6 +19,11 @@ from app.earthquake_store import (
     refresh_earthquakes,
     search_earthquakes,
     sync_history,
+    save_session,
+    save_message,
+    get_sessions,
+    get_session_messages,
+    delete_session as db_delete_session,
 )
 from app.query_filters import resolve_location
 
@@ -43,10 +48,27 @@ class ChatHistoryMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
+    session_id: str | None = None
     model: str | None = None
     client_time: str | None = None
     timezone: str | None = None
     history: list[ChatHistoryMessage] = Field(default_factory=list)
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    return {"sessions": get_sessions()}
+
+
+@app.get("/api/sessions/{session_id}")
+async def get_session_details(session_id: str):
+    return {"messages": get_session_messages(session_id)}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: str):
+    db_delete_session(session_id)
+    return {"status": "ok"}
 
 
 @app.get("/api/health")
@@ -202,6 +224,12 @@ async def run_chat(request: ChatRequest, emit=None):
     trace: list[dict] = []
     last_filters = {}
     last_results_count = 0
+    session_id = request.session_id
+
+    # Persist user message
+    if session_id:
+        save_session(session_id, request.query[:50])
+        save_message(session_id, "user", request.query)
 
     messages = [
         {
@@ -239,29 +267,69 @@ Decide what to do.
         })
         await publish_trace(trace, started_at, emit)
 
+        assistant_message = {"role": "assistant", "content": ""}
+        tool_calls_buffer = []
+        
         try:
-            assistant_message = await chat_with_tools(messages, model=request.model)
+            # If we are in the streaming mode, we can stream reasoning
+            if emit:
+                async for delta in stream_chat(messages, model=request.model):
+                    if "reasoning_content" in delta:
+                        await emit({
+                            "event": "thought",
+                            "thought": delta["reasoning_content"]
+                        })
+                    
+                    if "content" in delta and delta["content"]:
+                        content = delta["content"]
+                        assistant_message["content"] += content
+                    
+                    if "tool_calls" in delta:
+                        for tc_delta in delta["tool_calls"]:
+                            idx = tc_delta.get("index", 0)
+                            while len(tool_calls_buffer) <= idx:
+                                tool_calls_buffer.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            
+                            if "id" in tc_delta:
+                                tool_calls_buffer[idx]["id"] += tc_delta["id"]
+                            if "function" in tc_delta:
+                                if "name" in tc_delta["function"]:
+                                    tool_calls_buffer[idx]["function"]["name"] += tc_delta["function"]["name"]
+                                if "arguments" in tc_delta["function"]:
+                                    tool_calls_buffer[idx]["function"]["arguments"] += tc_delta["function"]["arguments"]
+                
+                if tool_calls_buffer:
+                    assistant_message["tool_calls"] = tool_calls_buffer
+            else:
+                assistant_message = await chat_with_tools(messages, model=request.model)
+        
         except httpx.RequestError as exc:
             trace[-1]["status"] = "error"
             trace[-1]["message"] = str(exc)
             await publish_trace(trace, started_at, emit)
+            err_msg = "**Erro**: O LM Studio não está acessível."
+            if session_id:
+                save_message(session_id, "bot", err_msg, trace=trace, trace_duration=round(time.perf_counter() - started_at, 2), filters=last_filters, is_error=True)
             return {
                 "filters_extracted": last_filters,
                 "results_count": last_results_count,
                 "trace": trace,
                 "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-                "response": "**Erro**: O LM Studio não está acessível.",
+                "response": err_msg,
             }
         except Exception as exc:
             trace[-1]["status"] = "error"
             trace[-1]["message"] = str(exc)
             await publish_trace(trace, started_at, emit)
+            err_msg = f"**Erro**: Falha no agente: {exc}"
+            if session_id:
+                save_message(session_id, "bot", err_msg, trace=trace, trace_duration=round(time.perf_counter() - started_at, 2), filters=last_filters, is_error=True)
             return {
                 "filters_extracted": last_filters,
                 "results_count": last_results_count,
                 "trace": trace,
                 "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-                "response": f"**Erro**: Falha no agente: {exc}",
+                "response": err_msg,
             }
 
         tool_calls = assistant_message.get("tool_calls") or []
@@ -277,7 +345,7 @@ Decide what to do.
 
         if not tool_calls:
             response_text = (assistant_message.get("content") or "").strip()
-            return {
+            res = {
                 "filters_extracted": last_filters,
                 "results_count": last_results_count,
                 "model": request.model or settings.LM_STUDIO_MODEL,
@@ -285,6 +353,9 @@ Decide what to do.
                 "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
                 "response": response_text or "Não consegui gerar uma resposta.",
             }
+            if session_id:
+                save_message(session_id, "bot", res["response"], trace=trace, trace_duration=res["trace_duration_seconds"], filters=last_filters)
+            return res
 
         messages.append({
             "role": "assistant",
@@ -334,13 +405,16 @@ Decide what to do.
                 "content": json.dumps(tool_result, ensure_ascii=False),
             })
 
+    final_msg = "Não consegui concluir o plano de ferramentas dentro do limite de passos."
+    if session_id:
+        save_message(session_id, "bot", final_msg, trace=trace, trace_duration=round(time.perf_counter() - started_at, 2), filters=last_filters, is_error=True)
     return {
         "filters_extracted": last_filters,
         "results_count": last_results_count,
         "model": request.model or settings.LM_STUDIO_MODEL,
         "trace": trace,
         "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-        "response": "Não consegui concluir o plano de ferramentas dentro do limite de passos.",
+        "response": final_msg,
     }
 
 

@@ -1,10 +1,13 @@
 <script>
   import { onDestroy } from 'svelte';
+  import { marked } from 'marked';
 
   /** @type {'user' | 'bot'} */
   export let role = 'bot';
   /** @type {string} */
   export let text = '';
+  /** @type {string} */
+  export let currentThought = '';
   /** @type {Object | null} */
   export let filters = null;
   /** @type {Array<Object> | null} */
@@ -21,7 +24,9 @@
   let intervalId;
 
   $: messageRoleClass = role === 'user' ? 'user' : 'assistant';
-  $: textParts = linkifyText(text);
+  $: renderedText = marked.parse(text || '');
+  $: renderedThought = marked.parse(currentThought || '');
+
   $: if (isLoading && !intervalId) {
     const startedAt = Date.now();
     intervalId = setInterval(() => {
@@ -36,33 +41,6 @@
   onDestroy(() => {
     if (intervalId) clearInterval(intervalId);
   });
-
-  function linkifyText(value = '') {
-    const pattern = /(https?:\/\/[^\s)]+)/g;
-    const parts = [];
-    let lastIndex = 0;
-    let match;
-
-    while ((match = pattern.exec(value)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({ type: 'text', value: value.slice(lastIndex, match.index) });
-      }
-
-      const url = match[0].replace(/[.,;:!?]+$/, '');
-      const trailing = match[0].slice(url.length);
-      parts.push({ type: 'link', value: url });
-      if (trailing) {
-        parts.push({ type: 'text', value: trailing });
-      }
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < value.length) {
-      parts.push({ type: 'text', value: value.slice(lastIndex) });
-    }
-
-    return parts.length ? parts : [{ type: 'text', value }];
-  }
 </script>
 
 <div 
@@ -79,9 +57,14 @@
               <path d="M10 22h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
               <path d="M8.6 14.5A6 6 0 1 1 15.4 14.5c-.7.5-1.4 1.4-1.4 2.5h-4c0-1.1-.7-2-1.4-2.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
             </svg>
-            <span>Thought for {loadingSeconds.toFixed(1)} seconds</span>
+            <span>Thinking... ({loadingSeconds.toFixed(1)}s)</span>
           </summary>
           <div class="thinking-lines">
+            {#if currentThought}
+              <div class="live-thought">
+                {@html renderedThought}
+              </div>
+            {/if}
             {#if trace && trace.length > 0}
               <div class="trace-list live">
                 {#each trace as step}
@@ -112,8 +95,8 @@
                   </div>
                 {/each}
               </div>
-            {:else}
-              <div>A aguardar o primeiro evento do backend.</div>
+            {:else if !currentThought}
+              <div>A aguardar o primeiro evento do backend...</div>
             {/if}
           </div>
         </details>
@@ -171,14 +154,8 @@
         </details>
       {/if}
 
-      <div class="message-content">
-        {#each textParts as part}
-          {#if part.type === 'link'}
-            <a href={part.value} target="_blank" rel="noreferrer">{part.value}</a>
-          {:else}
-            {part.value}
-          {/if}
-        {/each}
+      <div class="message-content markdown">
+        {@html renderedText}
       </div>
     </div>
   {/if}
@@ -211,6 +188,33 @@
     word-break: break-word;
   }
 
+  .message-content.markdown {
+    white-space: normal;
+  }
+
+  .message-content.markdown :global(p) {
+    margin: 0.5rem 0;
+  }
+  
+  .message-content.markdown :global(p:first-child) {
+    margin-top: 0;
+  }
+  
+  .message-content.markdown :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .message-content.markdown :global(ul), .message-content.markdown :global(ol) {
+    margin-left: 1.5rem;
+  }
+
+  .message-content.markdown :global(code) {
+    background: var(--hover-bg);
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-family: monospace;
+  }
+
   .message.assistant .message-content {
     background: transparent;
     border: none;
@@ -231,13 +235,13 @@
     transition: background-color 0.2s ease;
   }
 
-  .message-content a {
+  .message-content :global(a) {
     color: #2563eb;
     text-decoration: underline;
     text-underline-offset: 2px;
   }
 
-  .message-content a:hover {
+  .message-content :global(a:hover) {
     color: #1d4ed8;
   }
 
@@ -292,6 +296,18 @@
     color: var(--text);
     margin-top: 0.5rem;
     padding: 0.8rem 1rem;
+  }
+
+  .live-thought {
+    font-style: italic;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+    border-left: 2px solid var(--border);
+    padding-left: 1rem;
+  }
+
+  .live-thought :global(p) {
+    margin: 0.25rem 0;
   }
 
   .thinking-lines div + div {

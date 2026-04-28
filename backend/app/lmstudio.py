@@ -136,6 +136,7 @@ async def chat_with_tools(
         "tools": EARTHQUAKE_TOOLS,
         "tool_choice": "auto",
         "temperature": temperature,
+        "stream": False,
     }
 
     async with httpx.AsyncClient(timeout=90) as client:
@@ -144,3 +145,38 @@ async def chat_with_tools(
         data = response.json()
 
     return data["choices"][0]["message"]
+
+
+async def stream_chat(
+    messages: list[dict],
+    model: str | None = None,
+    temperature: float = 0.1,
+):
+    url = f"{settings.LM_STUDIO_BASE_URL}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.LM_STUDIO_API_KEY}"}
+    payload = {
+        "model": usable_model(model),
+        "messages": messages,
+        "tools": EARTHQUAKE_TOOLS,
+        "tool_choice": "auto",
+        "temperature": temperature,
+        "stream": True,
+    }
+
+    import json
+    async with httpx.AsyncClient(timeout=90) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                
+                if line == "data: [DONE]":
+                    break
+                
+                try:
+                    chunk = json.loads(line[6:])
+                    if chunk["choices"]:
+                        yield chunk["choices"][0]["delta"]
+                except Exception:
+                    continue

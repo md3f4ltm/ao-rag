@@ -50,6 +50,7 @@
     <MessageBubble 
       role={msg.role} 
       text={msg.text} 
+      currentThought={msg.currentThought}
       filters={msg.filters} 
       trace={msg.trace}
       traceDuration={msg.traceDuration}

@@ -17,8 +17,8 @@
     messages: [initialMessage]
   });
 
-  let conversations = [createConversation()];
-  let activeConversationId = conversations[0].id;
+  let conversations = [];
+  let activeConversationId = null;
   let models = [];
   let selectedModel = '';
   let darkMode = false;
@@ -28,11 +28,31 @@
   let topBarHidden = false;
   let showThoughts = true;
 
-  $: activeConversation = conversations.find((chat) => chat.id === activeConversationId) || conversations[0];
+  $: activeConversation = conversations.find((chat) => chat.id === activeConversationId);
   $: messages = activeConversation?.messages || [];
 
   onMount(async () => {
     document.body.dataset.theme = darkMode ? 'dark' : 'light';
+
+    // Load sessions
+    try {
+      const res = await fetch('/api/sessions');
+      const data = await res.json();
+      if (data.sessions && data.sessions.length > 0) {
+        conversations = data.sessions.map(s => ({
+          id: s.id,
+          title: s.title,
+          messages: [] // Will load on demand
+        }));
+        activeConversationId = conversations[0].id;
+        loadSessionMessages(activeConversationId);
+      } else {
+        newConversation();
+      }
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+      newConversation();
+    }
 
     try {
       const res = await fetch('/api/models');
@@ -47,6 +67,29 @@
     }
   });
 
+  async function loadSessionMessages(sessionId) {
+    const conv = conversations.find(c => c.id === sessionId);
+    if (conv && conv.messages.length > 0) return;
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`);
+      const data = await res.json();
+      updateConversation(sessionId, (chat) => ({
+        ...chat,
+        messages: data.messages.length > 0 ? data.messages.map(m => ({
+          role: m.role === 'bot' ? 'bot' : 'user',
+          text: m.content,
+          trace: m.trace,
+          traceDuration: m.trace_duration,
+          filters: m.filters,
+          isError: m.is_error
+        })) : [initialMessage]
+      }));
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  }
+
   function updateConversation(id, updater) {
     conversations = conversations.map((chat) => (
       chat.id === id ? updater(chat) : chat
@@ -54,7 +97,9 @@
   }
 
   function updateActiveConversation(updater) {
-    updateConversation(activeConversationId, updater);
+    if (activeConversationId) {
+      updateConversation(activeConversationId, updater);
+    }
   }
 
   function newConversation() {
@@ -64,10 +109,29 @@
     inputValue = '';
   }
 
+  async function deleteConversation(id, event) {
+    event.stopPropagation();
+    try {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      conversations = conversations.filter(c => c.id !== id);
+      if (activeConversationId === id) {
+        if (conversations.length > 0) {
+          activeConversationId = conversations[0].id;
+          loadSessionMessages(activeConversationId);
+        } else {
+          newConversation();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+    }
+  }
+
   function selectConversation(id) {
     if (loading) return;
     activeConversationId = id;
     inputValue = '';
+    loadSessionMessages(id);
   }
 
   function toggleTheme() {
@@ -117,7 +181,7 @@
       messages: [
         ...chat.messages,
         { role: 'user', text: userMsg },
-        { id: botMessageId, role: 'bot', text: '', trace: [], traceDuration: 0, isLoading: true }
+        { id: botMessageId, role: 'bot', text: '', trace: [], traceDuration: 0, isLoading: true, currentThought: '' }
       ]
     }));
     loading = true;
@@ -137,6 +201,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: userMsg,
+          session_id: targetConversationId,
           model: selectedModel || undefined,
           client_time: new Date().toISOString(),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -164,7 +229,21 @@
           const line = chunk.split('\n').find((entry) => entry.startsWith('data: '));
           if (!line) continue;
 
-          const data = JSON.parse(line.slice(6));
+          let data;
+          try {
+            data = JSON.parse(line.slice(6));
+          } catch (e) {
+            continue;
+          }
+
+          if (data.event === 'thought') {
+            const currentMsg = conversations.find(c => c.id === targetConversationId)?.messages.find(m => m.id === botMessageId);
+            const updatedThought = (currentMsg?.currentThought || '') + data.thought;
+            updateBotMessage({
+              currentThought: updatedThought,
+              isLoading: true
+            });
+          }
 
           if (data.event === 'trace') {
             updateBotMessage({
@@ -182,7 +261,8 @@
               trace: data.trace,
               traceDuration: data.trace_duration_seconds,
               isLoading: false,
-              isError: isErrorResponse
+              isError: isErrorResponse,
+              currentThought: ''
             });
           }
 
@@ -226,13 +306,18 @@
     {#if !sidebarCollapsed}
       <div class="chat-tabs">
         {#each conversations as chat}
-          <button
-            class:active={chat.id === activeConversationId}
-            type="button"
-            on:click={() => selectConversation(chat.id)}
-          >
-            {chat.title}
-          </button>
+          <div class="chat-tab-wrapper">
+            <button
+              class:active={chat.id === activeConversationId}
+              type="button"
+              on:click={() => selectConversation(chat.id)}
+            >
+              {chat.title}
+            </button>
+            <button class="delete-chat" type="button" title="Eliminar" on:click={(e) => deleteConversation(chat.id, e)}>
+              ×
+            </button>
+          </div>
         {/each}
       </div>
     {/if}
@@ -335,6 +420,34 @@
     gap: 0.25rem;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  .chat-tab-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    position: relative;
+  }
+
+  .chat-tab-wrapper:hover .delete-chat {
+    opacity: 1;
+  }
+
+  .delete-chat {
+    position: absolute;
+    right: 8px;
+    opacity: 0;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: opacity 0.2s, color 0.2s;
+  }
+
+  .delete-chat:hover {
+    color: var(--error-text);
   }
 
   .chat-tabs button {

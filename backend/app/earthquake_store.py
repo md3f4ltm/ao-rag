@@ -46,8 +46,119 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                role TEXT,
+                content TEXT,
+                trace TEXT,
+                trace_duration REAL,
+                filters TEXT,
+                is_error INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )
+            """
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_earthquakes_time ON earthquakes(time)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_earthquakes_magnitude ON earthquakes(magnitude)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
+
+
+def save_session(session_id: str, title: str) -> None:
+    init_db()
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO sessions (id, title, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (session_id, title),
+        )
+
+
+def save_message(
+    session_id: str,
+    role: str,
+    content: str,
+    trace: Any = None,
+    trace_duration: float | None = None,
+    filters: Any = None,
+    is_error: bool = False,
+) -> None:
+    init_db()
+    import json
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO messages (
+                session_id, role, content, trace, trace_duration, filters, is_error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                role,
+                content,
+                json.dumps(trace) if trace else None,
+                trace_duration,
+                json.dumps(filters) if filters else None,
+                1 if is_error else 0,
+            ),
+        )
+
+
+def get_sessions() -> list[dict[str, Any]]:
+    init_db()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_session_messages(session_id: str) -> list[dict[str, Any]]:
+    init_db()
+    import json
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT role, content, trace, trace_duration, filters, is_error
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY created_at ASC
+            """,
+            (session_id,),
+        ).fetchall()
+    
+    messages = []
+    for row in rows:
+        msg = dict(row)
+        msg["trace"] = json.loads(msg["trace"]) if msg["trace"] else None
+        msg["filters"] = json.loads(msg["filters"]) if msg["filters"] else None
+        msg["is_error"] = bool(msg["is_error"])
+        messages.append(msg)
+    return messages
+
+
+def delete_session(session_id: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
 
 
 def get_last_sync() -> datetime.datetime | None:
