@@ -1,0 +1,44 @@
+# Environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+venv/
+.venv/
+backend/venv/
+
+# Local generated data
+*.db
+*.sqlite
+*.sqlite3
+backend/earthquakes.sqlite3
+backend/earthquakes.json
+
+# Frontend
+node_modules/
+dist/
+dist-ssr/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor noise
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json

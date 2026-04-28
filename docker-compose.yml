@@ -7,8 +7,14 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - earthquake-data:/data
+    environment:
+      EARTHQUAKE_DB_FILE: /data/earthquakes.sqlite3
     env_file:
       - .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  earthquake-data:

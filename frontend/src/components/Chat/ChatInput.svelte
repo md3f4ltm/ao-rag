@@ -1,10 +1,12 @@
 <script>
+  import { tick } from 'svelte';
   import { createEventDispatcher } from 'svelte';
 
   export let loading = false;
   export let value = '';
   
   const dispatch = createEventDispatcher();
+  let textarea;
 
   function handleSubmit() {
     const trimmed = value.trim();
@@ -12,6 +14,7 @@
     
     dispatch('submit', { text: trimmed });
     value = '';
+    resizeTextarea();
   }
 
   function handleKeydown(e) {
@@ -20,30 +23,38 @@
       handleSubmit();
     }
   }
+
+  async function resizeTextarea() {
+    await tick();
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }
 </script>
 
 <div class="input-area">
   <label for="chat-input" class="sr-only">A sua pergunta sobre sismos</label>
-  <input 
+  <textarea
     id="chat-input"
-    type="text" 
+    bind:this={textarea}
     bind:value
+    on:input={resizeTextarea}
     on:keydown={handleKeydown}
-    placeholder="Escreva a sua pergunta aqui... (ex: sismos nos Açores)" 
+    placeholder="Pergunta sobre sismos"
+    rows="1"
     autocomplete="off"
     disabled={loading}
     aria-disabled={loading}
-  />
+  ></textarea>
   <button 
     on:click={handleSubmit} 
     disabled={loading || !value.trim()}
     aria-label={loading ? "A enviar..." : "Enviar pergunta"}
   >
-    {#if loading}
-      A enviar...
-    {:else}
-      Enviar
-    {/if}
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
   </button>
 </div>
 
@@ -60,83 +71,79 @@
   }
 
   .input-area {
-    padding: clamp(1rem, 3vw, 1.5rem);
-    background: rgba(15, 23, 42, 0.85);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border-top: 1px solid var(--card-border);
+    max-width: 48rem;
+    width: 100%;
+    margin: 0 auto;
+    padding: 1rem 1.5rem calc(1rem + env(safe-area-inset-bottom));
+    background: var(--bg);
     display: flex;
-    gap: 1rem;
-    align-items: center;
+    gap: 0.75rem;
+    align-items: flex-end;
   }
 
-  input[type="text"] {
+  textarea {
     flex: 1;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
-    padding: clamp(0.75rem, 2vw, 1rem) clamp(1rem, 2vw, 1.5rem);
-    color: white;
+    min-height: 54px;
+    max-height: 200px;
+    padding: 0.8rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    background: var(--control-bg);
+    color: var(--text);
     font-family: inherit;
     font-size: 1rem;
+    line-height: 1.5;
+    resize: none;
     outline: none;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
-  input[type="text"]:focus {
-    border-color: var(--primary);
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  textarea:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
   }
 
-  input[type="text"]::placeholder {
-    color: #64748b;
+  textarea::placeholder {
+    color: var(--muted);
   }
 
-  input:disabled {
+  textarea:disabled {
     opacity: 0.6;
     cursor: not-allowed;
   }
 
   button {
-    background: linear-gradient(135deg, var(--primary), var(--primary-hover));
-    color: white;
-    border: none;
-    border-radius: 12px;
-    padding: 0 clamp(1.2rem, 3vw, 2rem);
-    height: 100%;
-    min-height: 48px;
-    font-family: inherit;
-    font-weight: 600;
-    font-size: 1rem;
+    flex-shrink: 0;
+    width: 54px;
+    height: 54px;
+    padding: 0;
+    border: 1px solid var(--text);
+    border-radius: 0.75rem;
+    background: var(--text);
+    color: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 4px 6px -1px rgba(59, 130, 246, 0.3);
-    white-space: nowrap;
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
   }
 
   button:hover:not(:disabled) {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 12px -3px rgba(59, 130, 246, 0.4);
-  }
-
-  button:active:not(:disabled) {
-    transform: translateY(0);
+    background: #2563eb;
+    border-color: #2563eb;
   }
 
   button:disabled {
-    opacity: 0.6;
     cursor: not-allowed;
-    background: #475569;
-    box-shadow: none;
+    border-color: var(--border);
+    background: var(--hover-bg);
+    color: var(--muted);
   }
   
   @media (max-width: 480px) {
     .input-area {
-      flex-direction: column;
-    }
-    button {
-      width: 100%;
+      padding-inline: 1rem;
     }
   }
 </style>
