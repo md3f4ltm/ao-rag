@@ -5,12 +5,12 @@ Chat simples para consultar sismos em linguagem natural. Usa LM Studio para inte
 ## Requisitos
 
 - Docker e Docker Compose
-- Node.js/npm para correr o frontend em modo dev
 - LM Studio aberto com API em `http://localhost:1234/v1`
+- Node.js/npm apenas se quiseres correr o frontend em modo dev fora do Docker
 
 No LM Studio, carrega um modelo de chat/instruct. Modelos de embedding são ignorados no seletor do UI.
 
-## Iniciar backend
+## Iniciar com Docker
 
 Na raiz do projeto:
 
@@ -18,11 +18,13 @@ Na raiz do projeto:
 docker compose up --build
 ```
 
-A API fica em:
+O Docker compila o frontend Svelte/Vite, copia o build para o backend e arranca o FastAPI. A aplicação fica toda no mesmo URL:
 
 ```text
 http://localhost:8000
 ```
+
+A UI é servida em `/` e a API continua em `/api/...`.
 
 Testar health:
 
@@ -31,6 +33,8 @@ curl http://localhost:8000/api/health
 ```
 
 ## Iniciar frontend
+
+Este modo é só para desenvolvimento do frontend com hot reload. Para uso normal, `docker compose up --build` já inclui tudo.
 
 Noutro terminal:
 
@@ -78,7 +82,7 @@ Para perguntas como `último sismo em Lisboa`, o backend força uma consulta rec
 
 ## Comandos úteis
 
-Parar backend:
+Parar a aplicação:
 
 ```bash
 docker compose down

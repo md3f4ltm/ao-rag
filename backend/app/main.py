@@ -5,9 +5,10 @@ import time
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 import os
 import datetime
+from pathlib import Path
 from pydantic import BaseModel
 import httpx
 from app.config import settings
@@ -34,12 +35,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="sismoGPT API", lifespan=lifespan)
-
-# Mount static files
-static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
-if not os.path.exists(static_dir):
-    os.makedirs(static_dir, exist_ok=True)
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+frontend_dir = Path(__file__).resolve().parent.parent / "static"
 
 class ChatRequest(BaseModel):
     query: str
@@ -117,15 +113,6 @@ def format_response(filters: dict, results: list):
         response += f"- {date_str}: Magnitude {mag} - {place}{distance}\n"
         
     return response
-
-@app.get("/", response_class=HTMLResponse)
-async def get_index():
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_path):
-        with open(index_path, "r") as f:
-            return f.read()
-    return "Index not found. Please create static/index.html"
-
 
 @app.get("/api/health")
 async def health():
@@ -412,3 +399,7 @@ async def chat_stream(request: ChatRequest):
             await task
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+if frontend_dir.exists():
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
