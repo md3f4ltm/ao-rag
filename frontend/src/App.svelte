@@ -91,12 +91,23 @@
     selectedModel = event.detail.model;
   }
 
+  function buildHistory(chat) {
+    return (chat?.messages || [])
+      .filter((msg) => msg !== initialMessage && !msg.isLoading && msg.text)
+      .slice(-12)
+      .map((msg) => ({
+        role: msg.role === 'bot' ? 'assistant' : 'user',
+        content: msg.text
+      }));
+  }
+
   async function handleSendMessage(event) {
     const userMsg = event.detail.text;
     if (!userMsg) return;
 
     const targetConversationId = activeConversationId;
     const targetConversation = conversations.find((chat) => chat.id === targetConversationId);
+    const history = buildHistory(targetConversation);
     const botMessageId = crypto.randomUUID();
 
     const newTitle = targetConversation?.title === 'Novo chat' ? userMsg.slice(0, 42) : targetConversation?.title;
@@ -128,7 +139,8 @@
           query: userMsg,
           model: selectedModel || undefined,
           client_time: new Date().toISOString(),
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          history
         })
       });
 

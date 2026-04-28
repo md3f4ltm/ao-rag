@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 import datetime
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import httpx
 from app.config import settings
 from app.lmstudio import chat_with_tools, list_models
@@ -36,11 +36,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="sismoGPT API", lifespan=lifespan)
 frontend_dir = Path(__file__).resolve().parent.parent / "static"
 
+class ChatHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     query: str
     model: str | None = None
     client_time: str | None = None
     timezone: str | None = None
+    history: list[ChatHistoryMessage] = Field(default_factory=list)
 
 
 @app.get("/api/health")
@@ -174,6 +180,20 @@ async def execute_agent_tool(name: str, args: dict) -> dict:
     return {"error": f"Unknown tool: {name}"}
 
 
+def conversation_context(history: list[ChatHistoryMessage]) -> list[dict]:
+    context = []
+
+    for item in history[-12:]:
+        content = item.content.strip()
+        if not content:
+            continue
+
+        role = "assistant" if item.role in ["assistant", "bot"] else "user"
+        context.append({"role": role, "content": content[:4000]})
+
+    return context
+
+
 async def run_chat(request: ChatRequest, emit=None):
     started_at = time.perf_counter()
     user_time = request.client_time or datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -191,6 +211,8 @@ The user's current datetime is {user_time}; timezone is {user_timezone}; today's
 
 Decide what to do.
 - If the user is only greeting you or is not asking about earthquakes, answer normally and do not call tools.
+- Use the previous conversation messages to resolve follow-up questions like "e em Lisboa?", "e nos últimos 30 dias?", or "mostra mais".
+- For follow-ups that change only the place or time range, search only the new requested scope. Do not repeat old searches unless the user asks for a comparison.
 - If the user asks about earthquakes, use tool calls before answering.
 - Use sync_recent_earthquakes for general/latest recent global data.
 - Use sync_earthquake_history before search_earthquakes when the user asks for a specific place, date range, or "latest/last" event in a place. The search_earthquakes tool also refreshes matching history when you pass date filters, but you should still plan the steps explicitly when freshness matters.
@@ -204,6 +226,7 @@ Decide what to do.
 - Keep answers concise and in the user's language.
 """,
         },
+        *conversation_context(request.history),
         {"role": "user", "content": request.query},
     ]
 
