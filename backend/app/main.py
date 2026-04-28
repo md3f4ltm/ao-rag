@@ -6,13 +6,12 @@ import time
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
-import os
 import datetime
 from pathlib import Path
 from pydantic import BaseModel
 import httpx
 from app.config import settings
-from app.lmstudio import extract_filters, generate_answer, list_models
+from app.lmstudio import chat_with_tools, list_models
 from app.earthquake_store import (
     count_earthquakes,
     get_last_sync,
@@ -21,7 +20,7 @@ from app.earthquake_store import (
     search_earthquakes,
     sync_history,
 )
-from app.query_filters import merge_filters
+from app.query_filters import resolve_location
 
 
 @asynccontextmanager
@@ -43,76 +42,6 @@ class ChatRequest(BaseModel):
     client_time: str | None = None
     timezone: str | None = None
 
-
-def default_history_window() -> tuple[str, str]:
-    end = datetime.datetime.now(datetime.timezone.utc).date()
-    start = end - datetime.timedelta(days=30)
-    return start.isoformat(), end.isoformat()
-
-
-def query_asks_latest(filters: dict) -> bool:
-    return filters.get("sort") == "latest"
-
-
-def requested_date_range(filters: dict) -> tuple[str, str] | None:
-    if "data_inicio" in filters:
-        end = filters.get("data_fim") or datetime.datetime.now(datetime.timezone.utc).date().isoformat()
-        return filters["data_inicio"], end
-    return None
-
-
-def recent_date_range(filters: dict) -> tuple[str, str] | None:
-    if filters.get("sort") == "latest" and filters.get("limit") and "dias_atras" not in filters:
-        end = datetime.datetime.now(datetime.timezone.utc).date()
-        start = end - datetime.timedelta(days=365)
-        return start.isoformat(), end.isoformat()
-
-    if "dias_atras" not in filters:
-        return None
-
-    end = datetime.datetime.now(datetime.timezone.utc).date()
-    start = end - datetime.timedelta(days=int(filters["dias_atras"]))
-    return start.isoformat(), end.isoformat()
-
-
-def can_auto_sync_history(filters: dict, start_date: str, end_date: str) -> bool:
-    start = datetime.datetime.fromisoformat(start_date)
-    end = datetime.datetime.fromisoformat(end_date)
-    days = abs((end - start).days)
-    has_geo = all(key in filters for key in ["latitude", "longitude", "radius_km"])
-    has_strong_mag_filter = filters.get("magnitude_min", 0) >= 4
-    return has_geo or has_strong_mag_filter or days <= 366
-
-def format_response(filters: dict, results: list):
-    if not results:
-        period = f" nos últimos {filters['dias_atras']} dias" if "dias_atras" in filters else ""
-        if all(key in filters for key in ["local", "radius_km"]):
-            return (
-                f"Não encontrei sismos perto de {filters['local']} "
-                f"num raio de {filters['radius_km']} km{period} com os critérios especificados."
-            )
-        return f"Não encontrei sismos{period} com os critérios especificados."
-        
-    count = len(results)
-    
-    response = f"Encontrei {count} sismo(s)"
-    if "local" in filters:
-        response += f" em '{filters['local']}'"
-    if "magnitude_min" in filters:
-        response += f" com magnitude acima de {filters['magnitude_min']}"
-        
-    response += ".\n\nAqui estão os mais recentes:\n"
-    
-    # Show up to 5 results
-    for eq in results[:5]:
-        dt = datetime.datetime.fromtimestamp(eq["time"] / 1000, tz=datetime.timezone.utc)
-        date_str = dt.strftime("%d/%m/%Y %H:%M")
-        mag = eq["magnitude"]
-        place = eq["place"]
-        distance = f" ({eq['distance_km']} km aprox.)" if "distance_km" in eq else ""
-        response += f"- {date_str}: Magnitude {mag} - {place}{distance}\n"
-        
-    return response
 
 @app.get("/api/health")
 async def health():
@@ -155,214 +84,240 @@ async def publish_trace(trace: list[dict], started_at: float, emit=None) -> None
     })
 
 
+def compact_earthquake(item: dict) -> dict:
+    return {
+        "place": item.get("place"),
+        "magnitude": item.get("magnitude"),
+        "time": item.get("time"),
+        "time_utc": (
+            datetime.datetime.fromtimestamp(item["time"] / 1000, tz=datetime.timezone.utc).isoformat()
+            if item.get("time")
+            else None
+        ),
+        "depth": item.get("depth"),
+        "distance_km": item.get("distance_km"),
+        "url": item.get("url"),
+    }
+
+
+def filters_from_tool_args(args: dict) -> dict:
+    filters = {}
+
+    for key in [
+        "magnitude_min",
+        "magnitude_max",
+        "dias_atras",
+        "data_inicio",
+        "data_fim",
+        "sort",
+        "limit",
+    ]:
+        if args.get(key) is not None:
+            filters[key] = args[key]
+
+    location = resolve_location(str(args["local"])) if args.get("local") else {}
+    if location:
+        filters.update(location)
+
+    if all(args.get(key) is not None for key in ["latitude", "longitude", "radius_km"]) and not all(
+        key in location for key in ["latitude", "longitude", "radius_km"]
+    ):
+        filters["latitude"] = float(args["latitude"])
+        filters["longitude"] = float(args["longitude"])
+        filters["radius_km"] = float(args["radius_km"])
+        if args.get("local") and "local" not in filters:
+            filters["local"] = str(args["local"])
+
+    return filters
+
+
+async def execute_agent_tool(name: str, args: dict) -> dict:
+    if name == "sync_recent_earthquakes":
+        return await refresh_earthquakes(force=bool(args.get("force", False)))
+
+    if name == "sync_earthquake_history":
+        filters = filters_from_tool_args(args)
+        start_date = args["start_date"]
+        end_date = args["end_date"]
+        result = await sync_history(filters, start_date, end_date)
+        return {"filters": filters, **result}
+
+    if name == "search_earthquakes":
+        filters = filters_from_tool_args(args)
+        sync_result = None
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+
+        if "data_inicio" in filters:
+            start_date = filters["data_inicio"]
+            end_date = filters.get("data_fim") or today.isoformat()
+            sync_result = await sync_history(filters, start_date, end_date)
+        elif "dias_atras" in filters and (
+            filters.get("local")
+            or all(key in filters for key in ["latitude", "longitude", "radius_km"])
+            or all(
+                key in filters
+                for key in ["min_latitude", "max_latitude", "min_longitude", "max_longitude"]
+            )
+        ):
+            start_date = (today - datetime.timedelta(days=int(filters["dias_atras"]))).isoformat()
+            end_date = today.isoformat()
+            sync_result = await sync_history(filters, start_date, end_date)
+
+        results = search_earthquakes(filters)
+        return {
+            "filters": filters,
+            "pre_sync": sync_result,
+            "results_count": len(results),
+            "results": [compact_earthquake(item) for item in results[:12]],
+        }
+
+    return {"error": f"Unknown tool: {name}"}
+
+
 async def run_chat(request: ChatRequest, emit=None):
     started_at = time.perf_counter()
     user_time = request.client_time or datetime.datetime.now(datetime.timezone.utc).isoformat()
     user_timezone = request.timezone or "UTC"
-    trace = [
+    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    trace: list[dict] = []
+    last_filters = {}
+    last_results_count = 0
+
+    messages = [
         {
+            "role": "system",
+            "content": f"""You are sismoGPT, an earthquake assistant with tools.
+The user's current datetime is {user_time}; timezone is {user_timezone}; today's UTC date is {today}.
+
+Decide what to do.
+- If the user is only greeting you or is not asking about earthquakes, answer normally and do not call tools.
+- If the user asks about earthquakes, use tool calls before answering.
+- Use sync_recent_earthquakes for general/latest recent global data.
+- Use sync_earthquake_history before search_earthquakes when the user asks for a specific place, date range, or "latest/last" event in a place. The search_earthquakes tool also refreshes matching history when you pass date filters, but you should still plan the steps explicitly when freshness matters.
+- For "last/latest earthquake near/in PLACE" without an explicit date range, search up to the last 365 days.
+- For "last/latest/último" requests, pass sort="latest" and limit=1 to search_earthquakes.
+- For explicit windows like "últimos 10 dias", use that exact window.
+- For locations, pass the user's place name in local. If you know reliable coordinates for a city/region, also pass latitude, longitude and a practical radius_km.
+- After tools return, answer only from tool results. Do not invent events, dates, magnitudes or URLs.
+- Do not describe filters or thresholds that were not actually present in tool results.
+- When tool results include USGS URLs, include the URL for each listed event.
+- Keep answers concise and in the user's language.
+""",
+        },
+        {"role": "user", "content": request.query},
+    ]
+
+    for _ in range(6):
+        trace.append({
             "type": "llm",
-            "name": "extract_filters",
+            "name": "agent_decision",
             "status": "running",
             "model": request.model or settings.LM_STUDIO_MODEL,
-            "input": {"user_time": user_time, "timezone": user_timezone},
-        }
-    ]
-    await publish_trace(trace, started_at, emit)
-
-    # 1. Ask LLM to extract filters
-    result = await extract_filters(
-        request.query,
-        model=request.model,
-        user_time=user_time,
-        user_timezone=user_timezone,
-    )
-    
-    if result.get("status") == "error":
-        trace[-1]["status"] = "error"
-        trace[-1]["message"] = result.get("message")
-        await publish_trace(trace, started_at, emit)
-        return {
-            "filters_extracted": {},
-            "results_count": 0,
-            "trace": trace,
-            "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-            "response": f"**Erro**: {result.get('message')}"
-        }
-
-    filters = merge_filters(result.get("filters", {}), request.query)
-    trace[-1]["status"] = "done"
-    trace[-1]["output"] = filters
-    await publish_trace(trace, started_at, emit)
-
-    sync_actions = []
-
-    # 2. Keep the local SQLite database fresh, then query it.
-    try:
-        recent_sync = await refresh_earthquakes()
-        trace.append({
-            "type": "tool",
-            "name": "sync_recent",
-            "status": "done",
-            "output": recent_sync,
         })
         await publish_trace(trace, started_at, emit)
-    except httpx.HTTPError as exc:
-        trace.append({
-            "type": "tool",
-            "name": "sync_recent",
-            "status": "error",
-            "message": str(exc),
-        })
-        await publish_trace(trace, started_at, emit)
-        print(f"USGS sync failed during chat: {exc}")
 
-    date_range = requested_date_range(filters)
-    api_range = date_range or recent_date_range(filters)
-
-    should_sync_first = query_asks_latest(filters) and api_range and can_auto_sync_history(filters, *api_range)
-
-    if should_sync_first:
-        trace.append({
-            "type": "tool",
-            "name": "search_usgs_api",
-            "status": "running",
-            "input": {
-                "start_date": api_range[0],
-                "end_date": api_range[1],
-                "filters": filters,
-            },
-        })
-        await publish_trace(trace, started_at, emit)
         try:
-            sync_result = await sync_history(filters, *api_range)
-            sync_actions.append(sync_result)
-            trace[-1]["status"] = "done"
-            trace[-1]["output"] = sync_result
-            await publish_trace(trace, started_at, emit)
-        except httpx.HTTPError as exc:
+            assistant_message = await chat_with_tools(messages, model=request.model)
+        except httpx.RequestError as exc:
             trace[-1]["status"] = "error"
             trace[-1]["message"] = str(exc)
             await publish_trace(trace, started_at, emit)
-            print(f"USGS API search failed during chat: {exc}")
-
-    results = search_earthquakes(filters)
-    trace.append({
-        "type": "tool",
-        "name": "search_database",
-        "status": "done",
-        "input": filters,
-        "output": {"results_count": len(results), "after_api": should_sync_first},
-    })
-    await publish_trace(trace, started_at, emit)
-
-    if not results and not should_sync_first and api_range and can_auto_sync_history(filters, *api_range):
-        trace.append({
-            "type": "tool",
-            "name": "search_usgs_api",
-            "status": "running",
-            "input": {
-                "start_date": api_range[0],
-                "end_date": api_range[1],
-                "filters": filters,
-            },
-        })
-        await publish_trace(trace, started_at, emit)
-        try:
-            sync_result = await sync_history(filters, *api_range)
-            sync_actions.append(sync_result)
-            trace[-1]["status"] = "done"
-            trace[-1]["output"] = sync_result
-            await publish_trace(trace, started_at, emit)
-        except httpx.HTTPError as exc:
+            return {
+                "filters_extracted": last_filters,
+                "results_count": last_results_count,
+                "trace": trace,
+                "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
+                "response": "**Erro**: O LM Studio não está acessível.",
+            }
+        except Exception as exc:
             trace[-1]["status"] = "error"
             trace[-1]["message"] = str(exc)
             await publish_trace(trace, started_at, emit)
-            print(f"USGS API search failed during chat: {exc}")
+            return {
+                "filters_extracted": last_filters,
+                "results_count": last_results_count,
+                "trace": trace,
+                "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
+                "response": f"**Erro**: Falha no agente: {exc}",
+            }
 
-        results = search_earthquakes(filters)
-        trace.append({
-            "type": "tool",
-            "name": "search_database",
-            "status": "done",
-            "input": filters,
-            "output": {"results_count": len(results), "after_api": True},
-        })
+        tool_calls = assistant_message.get("tool_calls") or []
+        trace[-1]["status"] = "done"
+        trace[-1]["output"] = {
+            "tool_calls": [
+                call.get("function", {}).get("name")
+                for call in tool_calls
+            ],
+            "has_final_answer": not bool(tool_calls),
+        }
         await publish_trace(trace, started_at, emit)
 
-    if (
-        not results
-        and all(key in filters for key in ["latitude", "longitude", "radius_km"])
-        and not query_asks_latest(filters)
-    ):
-        start_date, end_date = date_range or default_history_window()
-        trace.append({
-            "type": "tool",
-            "name": "sync_history_fallback",
-            "status": "running",
-            "input": {"start_date": start_date, "end_date": end_date},
+        if not tool_calls:
+            response_text = (assistant_message.get("content") or "").strip()
+            return {
+                "filters_extracted": last_filters,
+                "results_count": last_results_count,
+                "model": request.model or settings.LM_STUDIO_MODEL,
+                "trace": trace,
+                "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
+                "response": response_text or "Não consegui gerar uma resposta.",
+            }
+
+        messages.append({
+            "role": "assistant",
+            "content": assistant_message.get("content") or "",
+            "tool_calls": tool_calls,
         })
-        await publish_trace(trace, started_at, emit)
-        try:
-            sync_result = await sync_history(filters, start_date, end_date)
-            sync_actions.append(sync_result)
-            trace[-1]["status"] = "done"
-            trace[-1]["output"] = sync_result
-            await publish_trace(trace, started_at, emit)
-            results = search_earthquakes(filters)
+
+        for call in tool_calls:
+            function = call.get("function") or {}
+            tool_name = function.get("name")
+            raw_args = function.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError:
+                args = {}
+
             trace.append({
                 "type": "tool",
-                "name": "search_database",
-                "status": "done",
-                "input": filters,
-                "output": {"results_count": len(results), "after_sync": True},
+                "name": tool_name,
+                "status": "running",
+                "input": args,
             })
             await publish_trace(trace, started_at, emit)
-        except httpx.HTTPError as exc:
-            trace[-1]["status"] = "error"
-            trace[-1]["message"] = str(exc)
-            await publish_trace(trace, started_at, emit)
-            print(f"USGS fallback history sync failed during chat: {exc}")
-    
-    # 3. Ask the selected LLM to write the final grounded answer from DB results.
-    trace.append({
-        "type": "llm",
-        "name": "final_answer",
-        "status": "running",
-        "model": request.model or settings.LM_STUDIO_MODEL,
-        "input": {"results_count": len(results)},
-    })
-    await publish_trace(trace, started_at, emit)
-    answer = await generate_answer(
-        request.query,
-        filters,
-        results,
-        model=request.model,
-        user_time=user_time,
-        user_timezone=user_timezone,
-    )
-    response_text = (
-        answer["answer"]
-        if answer.get("status") == "success"
-        else format_response(filters, results)
-    )
-    model_used = answer.get("model", request.model or settings.LM_STUDIO_MODEL)
-    trace[-1]["status"] = answer.get("status", "done")
-    trace[-1]["model"] = model_used
-    if answer.get("status") != "success":
-        trace[-1]["message"] = answer.get("message")
-    await publish_trace(trace, started_at, emit)
 
-    trace_duration_seconds = round(time.perf_counter() - started_at, 2)
-    
+            try:
+                tool_result = await execute_agent_tool(tool_name, args)
+                trace[-1]["status"] = "done"
+                trace[-1]["output"] = {
+                    key: value
+                    for key, value in tool_result.items()
+                    if key != "results"
+                }
+                if "filters" in tool_result:
+                    last_filters = tool_result["filters"]
+                if "results_count" in tool_result:
+                    last_results_count = int(tool_result["results_count"])
+            except Exception as exc:
+                tool_result = {"error": str(exc)}
+                trace[-1]["status"] = "error"
+                trace[-1]["message"] = str(exc)
+
+            await publish_trace(trace, started_at, emit)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call.get("id"),
+                "name": tool_name,
+                "content": json.dumps(tool_result, ensure_ascii=False),
+            })
+
     return {
-        "filters_extracted": filters,
-        "results_count": len(results),
-        "model": model_used,
-        "sync_actions": sync_actions,
+        "filters_extracted": last_filters,
+        "results_count": last_results_count,
+        "model": request.model or settings.LM_STUDIO_MODEL,
         "trace": trace,
-        "trace_duration_seconds": trace_duration_seconds,
-        "response": response_text
+        "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
+        "response": "Não consegui concluir o plano de ferramentas dentro do limite de passos.",
     }
 
 

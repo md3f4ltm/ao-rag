@@ -241,6 +241,17 @@ def search_earthquakes(filters: dict[str, Any]) -> list[dict[str, Any]]:
         clauses.append("longitude IS NOT NULL AND longitude BETWEEN ? AND ?")
         params.extend([filters["min_longitude"], filters["max_longitude"]])
 
+    if has_geo_filter:
+        latitude = float(filters["latitude"])
+        longitude = float(filters["longitude"])
+        radius_km = float(filters["radius_km"])
+        lat_delta = radius_km / 111.0
+        lon_delta = radius_km / max(111.0 * math.cos(math.radians(latitude)), 1.0)
+        clauses.append("latitude IS NOT NULL AND latitude BETWEEN ? AND ?")
+        params.extend([latitude - lat_delta, latitude + lat_delta])
+        clauses.append("longitude IS NOT NULL AND longitude BETWEEN ? AND ?")
+        params.extend([longitude - lon_delta, longitude + lon_delta])
+
     if "magnitude_min" in filters:
         clauses.append("magnitude IS NOT NULL AND magnitude >= ?")
         params.append(filters["magnitude_min"])
