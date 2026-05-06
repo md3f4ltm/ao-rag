@@ -90,7 +90,8 @@ EARTHQUAKE_TOOLS = [
                     },
                     "sort": {
                         "type": "string",
-                        "enum": ["latest"],
+                        "enum": ["latest", "magnitude_desc"],
+                        "description": "Use latest for most recent events, or magnitude_desc for strongest/most impactful events.",
                     },
                     "limit": {
                         "type": "integer",
@@ -99,6 +100,23 @@ EARTHQUAKE_TOOLS = [
                     },
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_library",
+            "description": "Search the local unstructured document library for safety guides, historical facts, and general earthquake knowledge.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query (keywords or natural language) to look for in the library.",
+                    }
+                },
+                "required": ["query"],
             },
         },
     },

@@ -3,6 +3,7 @@
   import Header from './components/Layout/Header.svelte';
   import MessageList from './components/Chat/MessageList.svelte';
   import ChatInput from './components/Chat/ChatInput.svelte';
+  import ArchitecturePage from './components/Architecture/ArchitecturePage.svelte';
 
   const initialMessage = {
     role: 'bot',
@@ -27,6 +28,7 @@
   let sidebarCollapsed = false;
   let topBarHidden = false;
   let showThoughts = true;
+  let currentView = 'chat'; // 'chat' | 'architecture'
 
   $: activeConversation = conversations.find((chat) => chat.id === activeConversationId);
   $: messages = activeConversation?.messages || [];
@@ -305,45 +307,70 @@
     </div>
     {#if !sidebarCollapsed}
       <div class="chat-tabs">
-        {#each conversations as chat}
+        {#each conversations as chat (chat.id)}
           <div class="chat-tab-wrapper">
             <button
-              class:active={chat.id === activeConversationId}
+              class="chat-tab"
+              class:active={chat.id === activeConversationId && currentView === 'chat'}
               type="button"
-              on:click={() => selectConversation(chat.id)}
+              on:click={() => { currentView = 'chat'; selectConversation(chat.id); }}
             >
               {chat.title}
             </button>
-            <button class="delete-chat" type="button" title="Eliminar" on:click={(e) => deleteConversation(chat.id, e)}>
+            <button
+              class="delete-chat"
+              type="button"
+              title="Eliminar"
+              aria-label={`Eliminar conversa ${chat.title}`}
+              on:click|stopPropagation={(e) => deleteConversation(chat.id, e)}
+            >
               ×
             </button>
           </div>
         {/each}
       </div>
+      <button
+        class="arch-tab"
+        class:active={currentView === 'architecture'}
+        type="button"
+        on:click={() => currentView = 'architecture'}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/>
+          <rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/>
+          <rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/>
+        </svg>
+        Arquitetura
+      </button>
     {/if}
   </aside>
 
   <section class="chat-shell" aria-label="Interface de conversação">
-    <Header
-      title="sismoGPT"
-      {models}
-      {selectedModel}
-      {darkMode}
-      hidden={topBarHidden}
-      {showThoughts}
-      on:newConversation={newConversation}
-      on:modelChange={handleModelChange}
-      on:toggleTheme={toggleTheme}
-      on:toggleThoughts={toggleThoughts}
-    />
-    <div class="chat-wrapper">
-      <MessageList {messages} {loading} {showThoughts} on:headerVisibility={handleHeaderVisibility} />
-      <ChatInput
-        bind:value={inputValue}
-        {loading}
-        on:submit={handleSendMessage}
+    {#if currentView === 'architecture'}
+      <ArchitecturePage onBack={() => currentView = 'chat'} />
+    {:else}
+      <Header
+        title="sismoGPT"
+        {models}
+        {selectedModel}
+        {darkMode}
+        hidden={topBarHidden}
+        {showThoughts}
+        on:newConversation={newConversation}
+        on:modelChange={handleModelChange}
+        on:toggleTheme={toggleTheme}
+        on:toggleThoughts={toggleThoughts}
       />
-    </div>
+      <div class="chat-wrapper">
+        <MessageList {messages} {loading} {showThoughts} on:headerVisibility={handleHeaderVisibility} />
+        <ChatInput
+          bind:value={inputValue}
+          {loading}
+          on:submit={handleSendMessage}
+        />
+      </div>
+    {/if}
   </section>
 </main>
 
@@ -423,34 +450,44 @@
   }
 
   .chat-tab-wrapper {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 2rem;
     align-items: center;
-    gap: 0.25rem;
-    position: relative;
-  }
-
-  .chat-tab-wrapper:hover .delete-chat {
-    opacity: 1;
+    gap: 0.2rem;
   }
 
   .delete-chat {
-    position: absolute;
-    right: 8px;
-    opacity: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    min-width: 2rem;
+    opacity: 0.65;
     background: transparent;
     border: none;
+    border-radius: 0.4rem;
     color: var(--muted);
     font-size: 1.2rem;
+    line-height: 1;
     cursor: pointer;
-    padding: 0 4px;
-    transition: opacity 0.2s, color 0.2s;
+    padding: 0;
+    overflow: visible;
+    text-align: center;
+    white-space: nowrap;
+    transition: opacity 0.2s, color 0.2s, background 0.2s;
   }
 
   .delete-chat:hover {
+    background: rgba(239, 68, 68, 0.1);
     color: var(--error-text);
   }
 
-  .chat-tabs button {
+  .chat-tab {
+    min-width: 0;
+  }
+
+  .chat-tabs .chat-tab {
     width: 100%;
     border: 0;
     border-radius: 0.5rem;
@@ -465,10 +502,38 @@
     white-space: nowrap;
   }
 
-  .chat-tabs button:hover,
-  .chat-tabs button.active {
+  .chat-tabs .chat-tab:hover,
+  .chat-tabs .chat-tab.active {
     background: var(--hover-bg);
     color: var(--text);
+  }
+
+  .arch-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    margin-top: auto;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--control-bg);
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .arch-tab:hover {
+    background: var(--hover-bg);
+    color: var(--text);
+  }
+
+  .arch-tab.active {
+    background: var(--hover-bg);
+    color: var(--text);
+    border-color: var(--muted);
   }
 
   .chat-shell {
@@ -514,10 +579,19 @@
       height: 66dvh;
     }
 
-    .chat-tabs button {
+    .chat-tabs .chat-tab {
       width: auto;
       max-width: 180px;
       flex-shrink: 0;
+    }
+
+    .chat-tab-wrapper {
+      grid-template-columns: minmax(120px, 180px) 2rem;
+      flex-shrink: 0;
+    }
+
+    .chat-tab {
+      max-width: 180px;
     }
   }
 </style>

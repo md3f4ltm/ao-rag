@@ -40,6 +40,38 @@ KNOWN_LOCATIONS = {
         "min_longitude": -32.0,
         "max_longitude": -6.0,
     },
+    "japao": {
+        "aliases": ["japão", "japao", "japan"],
+        "place_terms": ["japan"],
+        "min_latitude": 20.0,
+        "max_latitude": 46.0,
+        "min_longitude": 122.0,
+        "max_longitude": 154.0,
+    },
+    "espanha": {
+        "aliases": ["espanha", "spain"],
+        "place_terms": ["spain"],
+        "min_latitude": 35.0,
+        "max_latitude": 44.0,
+        "min_longitude": -10.0,
+        "max_longitude": 5.0,
+    },
+    "italia": {
+        "aliases": ["itália", "italia", "italy"],
+        "place_terms": ["italy"],
+        "min_latitude": 36.0,
+        "max_latitude": 47.0,
+        "min_longitude": 6.0,
+        "max_longitude": 19.0,
+    },
+    "california": {
+        "aliases": ["califórnia", "california", "ca"],
+        "place_terms": ["california", "ca"],
+        "min_latitude": 32.0,
+        "max_latitude": 42.0,
+        "min_longitude": -125.0,
+        "max_longitude": -114.0,
+    },
 }
 
 
