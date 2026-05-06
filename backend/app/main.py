@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field
 import httpx
 from app.config import settings
-from app.lmstudio import chat_with_tools, list_models, stream_chat
+from app.lmstudio import chat_with_tools, list_models, stream_chat, EARTHQUAKE_TOOLS
 from app.earthquake_store import (
     count_earthquakes,
     get_last_sync,
@@ -59,6 +59,7 @@ class ChatRequest(BaseModel):
     client_time: str | None = None
     timezone: str | None = None
     history: list[ChatHistoryMessage] = Field(default_factory=list)
+    allowed_tools: list[str] | None = None
 
 
 @app.get("/api/sessions")
@@ -803,6 +804,14 @@ async def run_chat(request: ChatRequest, emit=None):
     last_library_results = None
     session_id = request.session_id
 
+    # Filter tools based on request
+    available_tools = EARTHQUAKE_TOOLS
+    if request.allowed_tools is not None:
+        available_tools = [
+            t for t in EARTHQUAKE_TOOLS 
+            if t["function"]["name"] in request.allowed_tools
+        ]
+
     # Persist user message
     if session_id:
         save_session(session_id, request.query[:50])
@@ -841,55 +850,6 @@ async def run_chat(request: ChatRequest, emit=None):
             )
         return res
 
-    if is_earthquake_safety_query(request.query):
-        trace.append({
-            "type": "tool",
-            "name": "search_library",
-            "status": "running",
-            "input": {"query": request.query},
-        })
-        await publish_trace(trace, started_at, emit)
-
-        try:
-            library_result = await execute_agent_tool(
-                "search_library",
-                {"query": request.query},
-                query=request.query,
-                history=request.history,
-            )
-            library_text = str(library_result.get("results", ""))
-            trace[-1]["status"] = "done"
-            trace[-1]["output"] = {
-                "source": "document_store",
-                "has_results": bool(library_text and "Nenhum documento disponível" not in library_text),
-            }
-            response_text = earthquake_safety_response(library_text)
-        except Exception as exc:
-            trace[-1]["status"] = "error"
-            trace[-1]["message"] = str(exc)
-            response_text = earthquake_safety_response(None)
-
-        res = {
-            "filters_extracted": {"topic": "earthquake_safety"},
-            "results_count": 1,
-            "model": request.model or settings.LM_STUDIO_MODEL,
-            "trace": trace,
-            "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-            "response": response_text,
-        }
-        if session_id:
-            save_message(
-                session_id,
-                "bot",
-                res["response"],
-                trace=trace,
-                trace_duration=res["trace_duration_seconds"],
-                filters=res["filters_extracted"],
-                is_error=trace[-1]["status"] == "error",
-            )
-        await publish_trace(trace, started_at, emit)
-        return res
-
     historical_response = known_historical_event_response(request.query, user_timezone)
     if historical_response:
         trace.append({
@@ -917,58 +877,6 @@ async def run_chat(request: ChatRequest, emit=None):
                 trace_duration=res["trace_duration_seconds"],
                 filters=res["filters_extracted"],
             )
-        return res
-
-    deterministic_args = latest_event_args(request.query)
-    if deterministic_args:
-        trace.append({
-            "type": "tool",
-            "name": "search_earthquakes",
-            "status": "running",
-            "input": deterministic_args,
-        })
-        await publish_trace(trace, started_at, emit)
-
-        try:
-            tool_result = await execute_agent_tool(
-                "search_earthquakes",
-                deterministic_args,
-                query=request.query,
-                history=request.history,
-            )
-            trace[-1]["status"] = "done"
-            trace[-1]["output"] = {
-                key: value
-                for key, value in tool_result.items()
-                if key != "results"
-            }
-            last_filters = tool_result.get("filters", {})
-            last_results_count = int(tool_result.get("results_count", 0))
-            response_text = latest_event_response(tool_result, user_timezone)
-        except Exception as exc:
-            trace[-1]["status"] = "error"
-            trace[-1]["message"] = str(exc)
-            response_text = f"**Erro**: Falha ao procurar o último sismo: {exc}"
-
-        res = {
-            "filters_extracted": last_filters,
-            "results_count": last_results_count,
-            "model": request.model or settings.LM_STUDIO_MODEL,
-            "trace": trace,
-            "trace_duration_seconds": round(time.perf_counter() - started_at, 2),
-            "response": response_text,
-        }
-        if session_id:
-            save_message(
-                session_id,
-                "bot",
-                res["response"],
-                trace=trace,
-                trace_duration=res["trace_duration_seconds"],
-                filters=last_filters,
-                is_error=trace[-1]["status"] == "error",
-            )
-        await publish_trace(trace, started_at, emit)
         return res
 
     messages = [
@@ -1018,7 +926,7 @@ Decide what to do.
         try:
             # If we are in the streaming mode, we can stream reasoning
             if emit:
-                async for delta in stream_chat(messages, model=request.model):
+                async for delta in stream_chat(messages, model=request.model, tools=available_tools):
                     if "reasoning_content" in delta:
                         await emit({
                             "event": "thought",
@@ -1046,7 +954,7 @@ Decide what to do.
                 if tool_calls_buffer:
                     assistant_message["tool_calls"] = tool_calls_buffer
             else:
-                assistant_message = await chat_with_tools(messages, model=request.model)
+                assistant_message = await chat_with_tools(messages, model=request.model, tools=available_tools)
         
         except httpx.RequestError as exc:
             trace[-1]["status"] = "error"
@@ -1135,17 +1043,22 @@ Decide what to do.
                     history=request.history,
                 )
                 trace[-1]["status"] = "done"
-                trace[-1]["output"] = {
-                    key: value
-                    for key, value in tool_result.items()
-                    if key != "results"
-                }
+                # Keep results for library search so user can see it in trace
+                if tool_name == "search_library":
+                    trace[-1]["output"] = tool_result
+                else:
+                    trace[-1]["output"] = {
+                        key: value
+                        for key, value in tool_result.items()
+                        if key != "results"
+                    }
+                
                 if "filters" in tool_result:
                     last_filters = tool_result["filters"]
                 if "results_count" in tool_result:
                     last_results_count = int(tool_result["results_count"])
                 if tool_name == "search_library":
-                    last_library_results = str(tool_result.get("results", ""))
+                    last_library_results = json.dumps(tool_result.get("results", []))
             except Exception as exc:
                 tool_result = {"error": str(exc)}
                 trace[-1]["status"] = "error"

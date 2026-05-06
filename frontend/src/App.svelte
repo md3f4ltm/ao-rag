@@ -29,6 +29,12 @@
   let topBarHidden = false;
   let showThoughts = true;
   let currentView = 'chat'; // 'chat' | 'architecture'
+  let allowedTools = [
+    'sync_recent_earthquakes',
+    'sync_earthquake_history',
+    'search_earthquakes',
+    'search_library'
+  ];
 
   $: activeConversation = conversations.find((chat) => chat.id === activeConversationId);
   $: messages = activeConversation?.messages || [];
@@ -157,6 +163,10 @@
     selectedModel = event.detail.model;
   }
 
+  function handleToolsChange(event) {
+    allowedTools = event.detail.tools;
+  }
+
   function buildHistory(chat) {
     return (chat?.messages || [])
       .filter((msg) => msg !== initialMessage && !msg.isLoading && msg.text)
@@ -207,7 +217,8 @@
           model: selectedModel || undefined,
           client_time: new Date().toISOString(),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          history
+          history,
+          allowed_tools: allowedTools
         })
       });
 
@@ -367,7 +378,9 @@
         <ChatInput
           bind:value={inputValue}
           {loading}
+          {allowedTools}
           on:submit={handleSendMessage}
+          on:toolsChange={handleToolsChange}
         />
       </div>
     {/if}

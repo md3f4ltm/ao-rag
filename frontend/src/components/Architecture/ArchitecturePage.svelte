@@ -12,7 +12,7 @@
     },
     {
       label: 'Retrieval',
-      detail: 'SQLite para eventos sísmicos; Document Store para guias e contexto histórico.'
+      detail: 'SQLite para eventos sísmicos; Biblioteca Vetorial (ChromaDB) para guias e contexto histórico.'
     },
     {
       label: 'External data',
@@ -28,8 +28,8 @@
     ['Evento factual', '“último sismo no Japão”, “maior sismo em 2024”', 'Parser determinístico + USGS/SQLite'],
     ['Local desconhecido', '“último sismo na Mongólia”', 'Extrair local, geocodificar, consultar bounding box'],
     ['Histórico', '“maior sismo de sempre em Portugal”', 'Resposta histórica conhecida, não USGS recente'],
-    ['Segurança civil', '“como me proteger de um sismo”', 'Document Store + resposta prática'],
-    ['Conhecimento geral', '“o que é uma réplica?”', 'search_library e LLM local']
+    ['Segurança civil', '“como me proteger de um sismo”', 'ChromaDB + resposta prática'],
+    ['Conhecimento geral', '“o que é uma réplica?”', 'search_library (ChromaDB) e LLM local']
   ];
 
   const guardrails = [
@@ -44,7 +44,7 @@
     ['USGS FDSN / GeoJSON', 'Eventos modernos, magnitude, tempo, profundidade, coordenadas e URL de evidência.'],
     ['SQLite', 'Cache local pesquisável, histórico sincronizado por janela temporal e filtros espaciais.'],
     ['Nominatim', 'Fallback para transformar locais arbitrários em bounding boxes.'],
-    ['Document Store', 'PDF, Markdown e TXT para proteção civil, guias e contexto não estruturado.'],
+    ['ChromaDB', 'Base de dados vetorial com embeddings para pesquisa semântica em manuais e guias.'],
     ['LM Studio', 'Modelo local para formulação final quando a resposta precisa de linguagem natural.']
   ];
 </script>

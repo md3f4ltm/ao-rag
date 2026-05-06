@@ -145,14 +145,15 @@ async def chat_with_tools(
     messages: list[dict],
     model: str | None = None,
     temperature: float = 0.1,
+    tools: list[dict] | None = None,
 ) -> dict:
     url = f"{settings.LM_STUDIO_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.LM_STUDIO_API_KEY}"}
     payload = {
         "model": usable_model(model),
         "messages": messages,
-        "tools": EARTHQUAKE_TOOLS,
-        "tool_choice": "auto",
+        "tools": tools if tools is not None else EARTHQUAKE_TOOLS,
+        "tool_choice": "auto" if (tools or EARTHQUAKE_TOOLS) else "none",
         "temperature": temperature,
         "stream": False,
     }
@@ -169,14 +170,15 @@ async def stream_chat(
     messages: list[dict],
     model: str | None = None,
     temperature: float = 0.1,
+    tools: list[dict] | None = None,
 ):
     url = f"{settings.LM_STUDIO_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.LM_STUDIO_API_KEY}"}
     payload = {
         "model": usable_model(model),
         "messages": messages,
-        "tools": EARTHQUAKE_TOOLS,
-        "tool_choice": "auto",
+        "tools": tools if tools is not None else EARTHQUAKE_TOOLS,
+        "tool_choice": "auto" if (tools or EARTHQUAKE_TOOLS) else "none",
         "temperature": temperature,
         "stream": True,
     }
