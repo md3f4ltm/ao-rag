@@ -41,19 +41,7 @@
         {/each}
       {/if}
     </select>
-    <button
-      class="thoughts-btn"
-      type="button"
-      title={showThoughts ? 'Esconder thoughts/tools' : 'Mostrar thoughts/tools'}
-      aria-label={showThoughts ? 'Esconder thoughts e ferramentas' : 'Mostrar thoughts e ferramentas'}
-      on:click={() => dispatch('toggleThoughts')}
-    >
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M9 18h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        <path d="M10 22h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-        <path d="M8.6 14.5A6 6 0 1 1 15.4 14.5c-.7.5-1.4 1.4-1.4 2.5h-4c0-1.1-.7-2-1.4-2.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
-      </svg>
-    </button>
+
     <button
       class="theme-btn"
       type="button"
@@ -131,7 +119,6 @@
   }
 
   .new-conversation-btn,
-  .thoughts-btn,
   .theme-btn {
     width: 32px;
     height: 32px;
@@ -148,7 +135,6 @@
   }
 
   .new-conversation-btn:hover,
-  .thoughts-btn:hover,
   .theme-btn:hover {
     background-color: var(--hover-bg);
     color: var(--text);

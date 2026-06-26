@@ -219,11 +219,17 @@ async def sync_history(filters: dict[str, Any], start_date: str, end_date: str) 
     if (end - start).days > MAX_HISTORY_DAYS:
         start = end - datetime.timedelta(days=MAX_HISTORY_DAYS)
 
+    requested_end_date = end.date().isoformat()
+    api_end_date = (end + datetime.timedelta(days=1)).date().isoformat()
+    orderby = "time"
+    if filters.get("sort") in ["magnitude_desc", "impact"]:
+        orderby = "magnitude"
+
     params: dict[str, Any] = {
         "format": "geojson",
         "starttime": start.date().isoformat(),
-        "endtime": (end + datetime.timedelta(days=1)).date().isoformat(),
-        "orderby": "time",
+        "endtime": api_end_date,
+        "orderby": orderby,
         "limit": min(int(filters.get("limit", 20000)), 20000),
     }
 
@@ -266,7 +272,7 @@ async def sync_history(filters: dict[str, Any], start_date: str, end_date: str) 
         "reason": "history_synced_from_usgs",
         "count": len(rows),
         "start_date": params["starttime"],
-        "end_date": params["endtime"],
+        "end_date": requested_end_date,
         "geo_limited": "latitude" in params or "minlatitude" in params,
     }
 
@@ -372,8 +378,13 @@ def search_earthquakes(filters: dict[str, Any]) -> list[dict[str, Any]]:
         params.append(filters["magnitude_max"])
 
     if "dias_atras" in filters:
+        try:
+            dias_atras = int(filters["dias_atras"])
+        except (ValueError, TypeError):
+            dias_atras = 7
+
         cutoff_time = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-            days=filters["dias_atras"]
+            days=dias_atras
         )
         clauses.append("time IS NOT NULL AND time >= ?")
         params.append(int(cutoff_time.timestamp() * 1000))
@@ -388,11 +399,15 @@ def search_earthquakes(filters: dict[str, Any]) -> list[dict[str, Any]]:
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     limit = min(int(filters.get("limit", 500)), 500)
+    order_by = "COALESCE(time, 0) DESC"
+    if filters.get("sort") in ["magnitude_desc", "impact"]:
+        order_by = "COALESCE(magnitude, -999) DESC, COALESCE(time, 0) DESC"
+
     query = f"""
         SELECT id, place, magnitude, time, url, longitude, latitude, depth
         FROM earthquakes
         {where}
-        ORDER BY COALESCE(time, 0) DESC
+        ORDER BY {order_by}
         LIMIT {limit}
     """
 

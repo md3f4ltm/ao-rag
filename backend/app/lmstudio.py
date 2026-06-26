@@ -90,7 +90,8 @@ EARTHQUAKE_TOOLS = [
                     },
                     "sort": {
                         "type": "string",
-                        "enum": ["latest"],
+                        "enum": ["latest", "magnitude_desc"],
+                        "description": "Use latest for most recent events, or magnitude_desc for strongest/most impactful events.",
                     },
                     "limit": {
                         "type": "integer",
@@ -99,6 +100,23 @@ EARTHQUAKE_TOOLS = [
                     },
                 },
                 "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_library",
+            "description": "Search the local unstructured document library for safety guides, historical facts, and general earthquake knowledge.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query (keywords or natural language) to look for in the library.",
+                    }
+                },
+                "required": ["query"],
             },
         },
     },
@@ -127,14 +145,15 @@ async def chat_with_tools(
     messages: list[dict],
     model: str | None = None,
     temperature: float = 0.1,
+    tools: list[dict] | None = None,
 ) -> dict:
     url = f"{settings.LM_STUDIO_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.LM_STUDIO_API_KEY}"}
     payload = {
         "model": usable_model(model),
         "messages": messages,
-        "tools": EARTHQUAKE_TOOLS,
-        "tool_choice": "auto",
+        "tools": tools if tools is not None else EARTHQUAKE_TOOLS,
+        "tool_choice": "auto" if (tools or EARTHQUAKE_TOOLS) else "none",
         "temperature": temperature,
         "stream": False,
     }
@@ -151,14 +170,15 @@ async def stream_chat(
     messages: list[dict],
     model: str | None = None,
     temperature: float = 0.1,
+    tools: list[dict] | None = None,
 ):
     url = f"{settings.LM_STUDIO_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.LM_STUDIO_API_KEY}"}
     payload = {
         "model": usable_model(model),
         "messages": messages,
-        "tools": EARTHQUAKE_TOOLS,
-        "tool_choice": "auto",
+        "tools": tools if tools is not None else EARTHQUAKE_TOOLS,
+        "tool_choice": "auto" if (tools or EARTHQUAKE_TOOLS) else "none",
         "temperature": temperature,
         "stream": True,
     }
